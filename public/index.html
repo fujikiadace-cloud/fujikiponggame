@@ -1,0 +1,478 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no" />
+  <title>BrainRod PingPong Duel（通信対戦）</title>
+  <style>
+    html, body { margin:0; height:100%; background:#000; color:#e8eef7;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, "Hiragino Kaku Gothic ProN", "Noto Sans JP", sans-serif; }
+    #wrap { height:100%; width:100%; display:flex; align-items:center; justify-content:center; background:#000; overflow:hidden; }
+    canvas { touch-action:none; display:block; background:#0b0f14; }
+
+    .overlay{ position: fixed; inset: 0; display:flex; align-items:center; justify-content:center;
+      background: radial-gradient(1200px 800px at 50% 30%, rgba(20,36,58,.96) 0%, rgba(11,15,20,.96) 62%, rgba(7,10,15,.96) 100%);
+      padding: 18px; }
+    .panel{ width:min(860px, 100%); background: rgba(0,0,0,.42);
+      border: 1px solid rgba(255,255,255,.14); border-radius: 16px;
+      padding: 14px 14px 16px; box-shadow: 0 12px 40px rgba(0,0,0,.45);
+      backdrop-filter: blur(6px); }
+    .title{ font-weight: 900; letter-spacing:.6px; font-size: 18px; }
+    .sub{ opacity:.86; font-size: 12px; line-height:1.45; margin-top: 6px; }
+    .row{ display:flex; gap:12px; align-items:center; justify-content:space-between; flex-wrap:wrap; margin-top: 12px; }
+    .picker{ display:flex; gap:10px; align-items:center; }
+    .label{ font-weight:900; font-size:12px; opacity:.9; }
+    .thumb{ width:54px; height:54px; border-radius:14px; overflow:hidden;
+      background: rgba(255,255,255,.06); border:1px solid rgba(255,255,255,.16);
+      display:flex; align-items:center; justify-content:center; }
+    .thumb img{ width:100%; height:100%; object-fit: cover; }
+    input{
+      width: 140px;
+      border-radius: 14px;
+      border:1px solid rgba(255,255,255,.16);
+      background: rgba(255,255,255,.08);
+      color:#e8eef7;
+      padding: 10px 12px;
+      font-weight: 900;
+      letter-spacing: .8px;
+      text-transform: uppercase;
+    }
+    button{
+      appearance:none; border:1px solid rgba(255,255,255,.16);
+      background: rgba(255,255,255,.08); color:#e8eef7;
+      border-radius: 14px; padding: 10px 12px; font-weight: 900;
+    }
+    button.primary{ background: rgba(124,255,178,.18); border-color: rgba(124,255,178,.30); }
+    button.danger { background: rgba(255,107,107,.14); border-color: rgba(255,107,107,.26); }
+    button:active{ transform: translateY(1px); }
+    .small{ font-size:12px; padding: 8px 10px; border-radius:12px; }
+
+    #rotateOverlay{ display:none; }
+    #rotateOverlay .card{
+      width:min(520px, 100%); border:1px solid rgba(255,255,255,.14);
+      background: rgba(255,255,255,.06); border-radius: 16px; padding: 16px; text-align:center; }
+    #rotateOverlay .big{ font-weight: 900; font-size: 18px; letter-spacing:.4px; }
+    #rotateOverlay .note{ opacity:.86; font-size: 12px; line-height:1.45; margin-top: 8px; }
+
+    .hidden{ display:none !important; }
+    .badge{
+      display:inline-flex; align-items:center; gap:8px;
+      padding:6px 10px; border-radius: 999px;
+      background: rgba(255,255,255,.07); border:1px solid rgba(255,255,255,.12);
+      font-weight:900; font-size:12px;
+    }
+  </style>
+</head>
+<body>
+<div id="wrap"><canvas id="c"></canvas></div>
+
+<div id="rotateOverlay" class="overlay">
+  <div class="card">
+    <div class="big">横向きにしてください</div>
+    <div class="note">このゲームはスマホ横持ち専用です。<br/>端末を回転して横画面でプレイしてください。</div>
+  </div>
+</div>
+
+<div id="lobbyOverlay" class="overlay">
+  <div class="panel">
+    <div class="title">ふじき卓球ゲームl（通信対戦）</div>
+    <div class="sub">
+      ・同じURLを2台で開くだけでOK（サーバーURL入力は不要）<br/>
+      ・2台で同じ「部屋コード」に入ると対戦できます。<br/>
+      ・必殺：ゲージMAXで <b>ダブルタップ</b> → 次の返球が<b>加速＋カーブ</b>
+    </div>
+
+    <div class="row">
+      <div class="badge" id="connBadge">未接続</div>
+      <div class="sub" id="wsInfo"></div>
+    </div>
+
+    <div class="row">
+      <div class="sub">
+        ① 片方が「部屋を作る」 → ② 出たコードを相手に送る → ③ 相手が「入る」 → ④「ゲーム開始」
+      </div>
+    </div>
+
+    <div class="row">
+      <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+        <button id="createRoom" class="primary">部屋を作る</button>
+        <span class="label">部屋コード</span>
+        <input id="roomCode" placeholder="ABCD" maxlength="8"/>
+        <button id="joinRoom">入る</button>
+      </div>
+      <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+        <button id="startBtn" class="primary" disabled>ゲーム開始</button>
+        <button id="leaveBtn" class="danger" disabled>退出</button>
+      </div>
+    </div>
+
+    <div class="row">
+      <div class="picker">
+        <span class="label">自分のキャラ</span>
+        <button class="small" id="mePrev">◀</button>
+        <div class="thumb"><img id="meImg" alt="me"/></div>
+        <button class="small" id="meNext">▶</button>
+      </div>
+      <div class="picker">
+        <span class="label">相手のキャラ</span>
+        <div class="thumb"><img id="opImg" alt="op"/></div>
+      </div>
+      <div class="sub" id="roleText">役割：-</div>
+    </div>
+
+    <div class="sub" id="lobbyMsg" style="margin-top:12px;">接続中…（しばらく待ってください）</div>
+  </div>
+</div>
+
+<script>
+(() => {
+  const canvas = document.getElementById("c");
+  const ctx = canvas.getContext("2d");
+
+  const lobbyOverlay = document.getElementById("lobbyOverlay");
+  const rotateOverlay = document.getElementById("rotateOverlay");
+
+  const el = {
+    connBadge: document.getElementById("connBadge"),
+    wsInfo: document.getElementById("wsInfo"),
+    createRoom: document.getElementById("createRoom"),
+    roomCode: document.getElementById("roomCode"),
+    joinRoom: document.getElementById("joinRoom"),
+    startBtn: document.getElementById("startBtn"),
+    leaveBtn: document.getElementById("leaveBtn"),
+    mePrev: document.getElementById("mePrev"),
+    meNext: document.getElementById("meNext"),
+    meImg: document.getElementById("meImg"),
+    opImg: document.getElementById("opImg"),
+    roleText: document.getElementById("roleText"),
+    lobbyMsg: document.getElementById("lobbyMsg"),
+  };
+
+  const audio = (() => {
+    let ac = null;
+    const ensure = () => (ac ??= new (window.AudioContext || window.webkitAudioContext)());
+    const beep = (freq, dur=0.05, type="sine", gain=0.08) => {
+      const a = ensure();
+      const o = a.createOscillator();
+      const g = a.createGain();
+      o.type = type;
+      o.frequency.value = freq;
+      g.gain.value = gain;
+      o.connect(g); g.connect(a.destination);
+      o.start(); o.stop(a.currentTime + dur);
+    };
+    return { beep, resume: () => ensure().resume?.() };
+  })();
+
+  // sprites
+  const spriteFiles = ["assets/char1.png","assets/char2.png","assets/char3.png"];
+  const sprites = spriteFiles.map(src => { const img = new Image(); img.src = src; return img; });
+  const wrapIdx = (i) => (i % sprites.length + sprites.length) % sprites.length;
+
+  let myChar = 0, opChar = 1;
+  function updateThumbs(){
+    el.meImg.src = spriteFiles[myChar];
+    el.opImg.src = spriteFiles[opChar];
+  }
+  updateThumbs();
+
+  el.mePrev.addEventListener("click", () => { audio.resume(); myChar = wrapIdx(myChar-1); updateThumbs(); send({t:"char", c: myChar}); audio.beep(420,0.03,"triangle",0.05); });
+  el.meNext.addEventListener("click", () => { audio.resume(); myChar = wrapIdx(myChar+1); updateThumbs(); send({t:"char", c: myChar}); audio.beep(420,0.03,"triangle",0.05); });
+
+  // layout (16:9)
+  const state = { w:900,h:540,vw:0,vh:0, started:false, role:null, room:null, connected:false, inRoom:false };
+  const clamp = (v,a,b)=>Math.max(a,Math.min(b,v));
+  function layout(){
+    const vw = window.innerWidth, vh = window.innerHeight;
+    state.vw = vw; state.vh = vh;
+    rotateOverlay.style.display = (vh > vw) ? "flex" : "none";
+
+    const targetAspect = 16/9;
+    let cw = vw, ch = vh;
+    if (cw/ch > targetAspect) cw = ch*targetAspect; else ch = cw/targetAspect;
+
+    canvas.style.width = `${cw}px`; canvas.style.height = `${ch}px`;
+    const dpr = Math.max(1, Math.min(2.5, window.devicePixelRatio || 1));
+    canvas.width = Math.floor(cw*dpr); canvas.height = Math.floor(ch*dpr);
+    ctx.setTransform(dpr,0,0,dpr,0,0);
+    state.w = cw; state.h = ch;
+  }
+  window.addEventListener("resize", layout);
+  window.addEventListener("orientationchange", layout);
+  requestAnimationFrame(layout);
+
+  async function tryFullscreenAndLandscapeLock(){
+    try { if (!document.fullscreenElement && canvas.requestFullscreen) await canvas.requestFullscreen(); } catch {}
+    try { if (screen.orientation && screen.orientation.lock) await screen.orientation.lock("landscape"); } catch {}
+  }
+
+  // WebSocket: same origin, path /ws
+  const WS_URL = (() => {
+    const proto = location.protocol === "https:" ? "wss:" : "ws:";
+    return `${proto}//${location.host}/ws`;
+  })();
+  el.wsInfo.textContent = `接続先：${WS_URL}`;
+
+  function badge(text, ok=false){
+    el.connBadge.textContent = text;
+    el.connBadge.style.background = ok ? "rgba(124,255,178,.12)" : "rgba(255,255,255,.07)";
+    el.connBadge.style.borderColor = ok ? "rgba(124,255,178,.24)" : "rgba(255,255,255,.12)";
+  }
+
+  let ws = null;
+  function connect(){
+    badge("接続中…");
+    ws = new WebSocket(WS_URL);
+    ws.onopen = () => {
+      state.connected = true;
+      badge("接続OK", true);
+      el.lobbyMsg.textContent = "接続OK。部屋を作る or 入ってください。";
+      send({t:"hello", c: myChar});
+    };
+    ws.onclose = () => {
+      state.connected = false;
+      state.inRoom = false;
+      state.role = null;
+      badge("未接続");
+      el.startBtn.disabled = true;
+      el.leaveBtn.disabled = true;
+      el.lobbyMsg.textContent = "切断されました。ページを再読み込みしてください。";
+    };
+    ws.onerror = () => {
+      el.lobbyMsg.textContent = "接続エラー。サーバーが起動しているか確認してください。";
+    };
+    ws.onmessage = (ev) => {
+      let msg = null;
+      try { msg = JSON.parse(ev.data); } catch { return; }
+      onMsg(msg);
+    };
+  }
+
+  function send(obj){
+    if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj));
+  }
+
+  // lobby
+  el.createRoom.addEventListener("click", () => { audio.resume(); send({t:"create", c: myChar}); });
+  el.joinRoom.addEventListener("click", () => {
+    audio.resume();
+    const code = (el.roomCode.value || "").trim().toUpperCase();
+    if (!code) { el.lobbyMsg.textContent = "部屋コードを入力してください"; return; }
+    send({t:"join", room: code, c: myChar});
+  });
+  el.leaveBtn.addEventListener("click", () => {
+    audio.resume();
+    if (!state.inRoom) return;
+    send({t:"leave"});
+    state.inRoom = false; state.role = null; state.room = null;
+    el.roleText.textContent = "役割：-";
+    el.lobbyMsg.textContent = "退出しました。部屋を作る or 入ってください。";
+    el.startBtn.disabled = true; el.leaveBtn.disabled = true;
+  });
+  el.startBtn.addEventListener("click", async () => {
+    audio.resume();
+    await tryFullscreenAndLandscapeLock();
+    send({t:"start"});
+  });
+
+  // server -> client
+  const game = { mode:"ready", scoreL:0, scoreR:0, paddleL:0.5, paddleR:0.5, ballX:0.5, ballY:0.5, ballR:0.014,
+    gaugeL:0, gaugeR:0, specialL:false, specialR:false, winner:null };
+
+  function onMsg(m){
+    if (m.t === "room"){
+      state.inRoom = true;
+      state.room = m.room;
+      state.role = m.role;
+      el.roomCode.value = m.room;
+      el.roleText.textContent = `役割：${m.role === "L" ? "左プレイヤー" : "右プレイヤー"}`;
+      el.lobbyMsg.textContent = m.otherPresent ? "相手が入室しました。「ゲーム開始」を押してください。" : "相手の入室待ち…（同じコードで入ってもらってください）";
+      el.startBtn.disabled = !m.canStart;
+      el.leaveBtn.disabled = false;
+      if (typeof m.otherChar === "number") { opChar = m.otherChar; updateThumbs(); }
+      send({t:"char", c: myChar});
+    }
+    if (m.t === "other_char"){ opChar = m.c; updateThumbs(); }
+    if (m.t === "info"){ el.lobbyMsg.textContent = m.msg; }
+    if (m.t === "start_ok"){ state.started = true; lobbyOverlay.classList.add("hidden"); audio.beep(520,0.05,"triangle",0.06); }
+    if (m.t === "state"){ Object.assign(game, m.s); }
+  }
+
+  // input
+  const pointers = new Map();
+  function pointerToCanvas(e){
+    const rect = canvas.getBoundingClientRect();
+    return { x: (e.clientX - rect.left), y: (e.clientY - rect.top), inside: (e.clientX>=rect.left&&e.clientX<=rect.right&&e.clientY>=rect.top&&e.clientY<=rect.bottom) };
+  }
+  let lastTap = 0;
+  function isDoubleTap(){ const now = performance.now(); const dt = now-lastTap; lastTap = now; return dt < 300; }
+
+  function sendPaddle(yNorm){ if (state.inRoom) send({t:"input", y: yNorm}); }
+  function sendSpecial(){ if (state.inRoom) send({t:"special"}); }
+
+  canvas.addEventListener("pointerdown", (e) => {
+    audio.resume();
+    const p = pointerToCanvas(e);
+    if (!p.inside) return;
+    canvas.setPointerCapture(e.pointerId);
+    pointers.set(e.pointerId, true);
+
+    if (isDoubleTap()) sendSpecial();
+    sendPaddle(clamp(p.y / state.h, 0, 1));
+  });
+  canvas.addEventListener("pointermove", (e) => {
+    if (!pointers.has(e.pointerId)) return;
+    const p = pointerToCanvas(e);
+    sendPaddle(clamp(p.y / state.h, 0, 1));
+  });
+  canvas.addEventListener("pointerup", (e)=>pointers.delete(e.pointerId));
+  canvas.addEventListener("pointercancel", (e)=>pointers.delete(e.pointerId));
+
+  canvas.addEventListener("pointerdown", () => {
+    if (state.started && state.inRoom && game.mode === "win") send({t:"rematch"});
+  });
+
+  // draw
+  function drawHUD(){
+    const pad = 10;
+    ctx.save();
+    ctx.globalAlpha = 0.78;
+    ctx.fillStyle = "rgba(0,0,0,.35)";
+    ctx.beginPath(); ctx.roundRect(pad, pad, 250, 58, 14); ctx.fill();
+
+    ctx.globalAlpha = 0.95;
+    ctx.fillStyle = "#e8eef7";
+    ctx.font = "900 18px system-ui";
+    ctx.textBaseline = "top";
+    ctx.fillText(`${game.scoreL} - ${game.scoreR}`, pad+14, pad+10);
+
+    const gw = 110, gh = 8, gy = pad + 36;
+    ctx.globalAlpha = 0.35; ctx.fillStyle="#fff";
+    ctx.fillRect(pad+14, gy, gw, gh);
+    ctx.fillRect(pad+14+gw+10, gy, gw, gh);
+
+    ctx.globalAlpha = 0.90;
+    ctx.fillStyle = "rgba(124,255,178,.95)";
+    ctx.fillRect(pad+14, gy, gw * game.gaugeL, gh);
+    ctx.fillStyle = "rgba(255,107,107,.95)";
+    ctx.fillRect(pad+14+gw+10, gy, gw * game.gaugeR, gh);
+
+    ctx.globalAlpha = 0.72;
+    ctx.fillStyle = "#e8eef7";
+    ctx.font = "800 11px system-ui";
+    const role = state.role ? (state.role==="L" ? "左" : "右") : "-";
+    ctx.fillText(`あなた：${role} / ダブルタップで必殺`, pad+14, pad+52);
+    ctx.restore();
+  }
+
+  function drawRacket(cx, cy, armed, side){
+    const faceR = 26, handleW = 12, handleH = 40;
+    if (armed){
+      ctx.save();
+      ctx.globalAlpha = 0.22;
+      ctx.beginPath(); ctx.arc(cx, cy, faceR+10, 0, Math.PI*2);
+      ctx.fillStyle = side==="L" ? "rgba(124,255,178,.9)" : "rgba(255,107,107,.9)";
+      ctx.fill(); ctx.restore();
+    }
+    ctx.save();
+    ctx.beginPath(); ctx.arc(cx, cy, faceR, 0, Math.PI*2);
+    ctx.fillStyle="rgba(255,255,255,.12)"; ctx.fill();
+    ctx.lineWidth=3; ctx.strokeStyle="rgba(255,255,255,.24)"; ctx.stroke();
+    ctx.beginPath(); ctx.roundRect(cx-handleW/2, cy+faceR-6, handleW, handleH, 6);
+    ctx.fillStyle="rgba(255,255,255,.10)"; ctx.fill();
+    ctx.strokeStyle="rgba(255,255,255,.18)"; ctx.lineWidth=2; ctx.stroke();
+    ctx.globalAlpha=0.35;
+    ctx.beginPath(); ctx.arc(cx-8, cy-10, 10, 0, Math.PI*2);
+    ctx.fillStyle="#fff"; ctx.fill();
+    ctx.restore();
+  }
+
+  function drawSprite(img, x, y){
+    if (!img.complete || img.naturalWidth === 0) return;
+    const targetH = 86;
+    const scale = targetH / img.naturalHeight;
+    const tw = img.naturalWidth * scale;
+    ctx.save(); ctx.globalAlpha = 0.96;
+    ctx.drawImage(img, x - tw/2, y - targetH/2, tw, targetH);
+    ctx.restore();
+  }
+
+  function draw(){
+    const w = state.w, h = state.h;
+    const g = ctx.createRadialGradient(w*0.5, h*0.3, 40, w*0.5, h*0.3, Math.max(w,h));
+    g.addColorStop(0, "#14243a"); g.addColorStop(0.62, "#0b0f14"); g.addColorStop(1, "#070a0f");
+    ctx.fillStyle = g; ctx.fillRect(0,0,w,h);
+
+    const margin = 18;
+    ctx.save();
+    ctx.globalAlpha = 0.75; ctx.strokeStyle="rgba(255,255,255,.12)"; ctx.lineWidth=2;
+    ctx.strokeRect(margin, margin, w-margin*2, h-margin*2);
+    ctx.restore();
+
+    ctx.save();
+    ctx.strokeStyle="rgba(255,255,255,.16)"; ctx.lineWidth=4;
+    ctx.setLineDash([10,12]);
+    ctx.beginPath(); ctx.moveTo(w/2, margin); ctx.lineTo(w/2, h-margin); ctx.stroke();
+    ctx.setLineDash([]); ctx.restore();
+
+    const pLx = margin + 40, pRx = w - margin - 40;
+    const pLy = margin + (h - margin*2) * game.paddleL;
+    const pRy = margin + (h - margin*2) * game.paddleR;
+
+    drawRacket(pLx, pLy, game.specialL, "L");
+    drawRacket(pRx, pRy, game.specialR, "R");
+
+    const safeL = margin + 86, safeR = w - margin - 86;
+    drawSprite(sprites[myChar], clamp(pLx-72, safeL, safeR), pLy);
+    drawSprite(sprites[opChar], clamp(pRx+72, safeL, safeR), pRy);
+
+    const bx = margin + (w - margin*2) * game.ballX;
+    const by = margin + (h - margin*2) * game.ballY;
+    const br = Math.max(6, (w+h)*0.006 * (game.ballR/0.014));
+    ctx.save();
+    ctx.beginPath(); ctx.arc(bx, by, br, 0, Math.PI*2); ctx.fillStyle="#e8eef7"; ctx.fill();
+    ctx.globalAlpha=0.25;
+    ctx.beginPath(); ctx.arc(bx-2.5, by-3.2, br*0.6, 0, Math.PI*2); ctx.fillStyle="#fff"; ctx.fill();
+    ctx.restore();
+
+    if (state.started) drawHUD();
+
+    if (game.mode === "win" && game.winner){
+      ctx.save();
+      ctx.globalAlpha = 0.9;
+      ctx.fillStyle="rgba(0,0,0,.55)";
+      ctx.beginPath(); ctx.roundRect(w*0.18, h*0.18, w*0.64, 84, 16); ctx.fill();
+      ctx.fillStyle="#e8eef7";
+      ctx.font="900 20px system-ui"; ctx.textAlign="center"; ctx.textBaseline="middle";
+      ctx.fillText(`WIN: ${game.winner==="L"?"左":"右"}（タップで再戦）`, w/2, h*0.18+42);
+      ctx.restore();
+    }
+  }
+
+  function loop(){
+    if (Math.abs(window.innerWidth - state.vw) > 1 || Math.abs(window.innerHeight - state.vh) > 1) layout();
+    draw();
+    requestAnimationFrame(loop);
+  }
+
+  // polyfill
+  if (!CanvasRenderingContext2D.prototype.roundRect) {
+    CanvasRenderingContext2D.prototype.roundRect = function(x, y, w, h, r){
+      r = Math.min(r, w/2, h/2);
+      this.beginPath();
+      this.moveTo(x+r, y);
+      this.arcTo(x+w, y, x+w, y+h, r);
+      this.arcTo(x+w, y+h, x, y+h, r);
+      this.arcTo(x, y+h, x, y, r);
+      this.arcTo(x, y, x+w, y, r);
+      this.closePath();
+      return this;
+    };
+  }
+
+  connect();
+  requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>
