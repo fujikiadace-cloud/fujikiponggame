@@ -1,17 +1,3 @@
-/**
- * BrainRod PingPong Duel - One-URL server
- * - Serves static files from ../public
- * - WebSocket endpoint at /ws on SAME origin/port
- *
- * Run:
- *   cd server
- *   npm i
- *   npm start
- *
- * Open:
- *   http://<server-ip>:8787/
- * (Same URL on two phones, then room code)
- */
 const http = require("http");
 const path = require("path");
 const fs = require("fs");
@@ -31,50 +17,43 @@ const makeCode = () => {
   return s;
 };
 
-function send(ws, obj){
-  if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj));
-}
-function broadcast(room, obj){
-  for (const role of ["L","R"]){
-    const ws = room.players[role];
-    if (ws) send(ws, obj);
-  }
-}
+function send(ws, obj){ if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj)); }
+function broadcast(room, obj){ for (const role of ["T","B"]){ const ws = room.players[role]; if (ws) send(ws, obj); } }
 
 function createRoom(code){
   return {
     code,
-    players: { L: null, R: null },
-    chars: { L: 0, R: 1 },
+    players: { T: null, B: null },
+    chars: { T: 0, B: 1 },
     started: false,
-    serving: "R",
+    serving: "B",
     s: {
       mode: "ready",
-      scoreL: 0, scoreR: 0,
-      paddleL: 0.5, paddleR: 0.5,
+      scoreT: 0, scoreB: 0,
+      paddleT: 0.5, paddleB: 0.5,
       ballX: 0.5, ballY: 0.5,
-      ballR: 0.014,
+      ballR: 0.012,
       vx: 0, vy: 0,
       spin: 0,
-      gaugeL: 0, gaugeR: 0,
-      specialL: false, specialR: false,
-      winner: null,
+      gaugeT: 0, gaugeB: 0,
+      armedT: false, armedB: false,
+      winner: null
     },
-    input: { L: { y: 0.5 }, R: { y: 0.5 } },
+    input: { T: { x: 0.5 }, B: { x: 0.5 } },
   };
 }
 
-const rooms = new Map(); // code -> room
-const meta = new Map();  // ws -> { room, role }
+const rooms = new Map();
+const meta = new Map();
 
 function roomInfo(room, youRole){
-  const otherRole = youRole === "L" ? "R" : "L";
+  const otherRole = youRole === "T" ? "B" : "T";
   return {
     t: "room",
     room: room.code,
     role: youRole,
     otherPresent: !!room.players[otherRole],
-    canStart: !!room.players.L && !!room.players.R && !room.started,
+    canStart: !!room.players.T && !!room.players.B && !room.started,
     otherChar: room.players[otherRole] ? room.chars[otherRole] : undefined,
   };
 }
@@ -84,111 +63,102 @@ function resetRound(room, serving){
   s.mode = "ready";
   s.ballX = 0.5; s.ballY = 0.5;
   s.vx = 0; s.vy = 0; s.spin = 0;
-  s.specialL = false; s.specialR = false;
+  s.armedT = false; s.armedB = false;
   room.serving = serving;
 }
-
 function serve(room){
   const s = room.s;
   s.mode = "play";
-  const dir = (room.serving === "L") ? 1 : -1;
-  const speed = 0.42 + (s.scoreL + s.scoreR) * 0.012;
-  const angle = rand(-0.28, 0.28);
-  s.vx = Math.cos(angle) * speed * dir;
-  s.vy = Math.sin(angle) * speed;
+  const vySign = (room.serving === "T") ? 1 : -1;
+  const speed = 0.46 + (s.scoreT + s.scoreB) * 0.012;
+  const angle = rand(-0.35, 0.35);
+  s.vx = Math.sin(angle) * speed;
+  s.vy = Math.cos(angle) * speed * vySign;
   s.spin = 0;
 }
-
 function score(room, side){
   const s = room.s;
-  if (side === "L") s.scoreL++; else s.scoreR++;
-  if (s.scoreL >= 7 || s.scoreR >= 7){
+  if (side === "T") s.scoreT++; else s.scoreB++;
+  if (s.scoreT >= 7 || s.scoreB >= 7){
     s.mode = "win";
-    s.winner = (s.scoreL > s.scoreR) ? "L" : "R";
+    s.winner = (s.scoreT > s.scoreB) ? "T" : "B";
     room.started = true;
     return;
   }
   resetRound(room, side);
+  serve(room);
 }
 
 function applySpecial(room, role){
   const s = room.s;
-  if (role === "L"){
-    if (s.gaugeL < 1) return false;
-    s.gaugeL = 0; s.specialL = true; return true;
+  if (role === "T"){
+    if (s.gaugeT < 1) return false;
+    s.gaugeT = 0; s.armedT = true; return true;
   } else {
-    if (s.gaugeR < 1) return false;
-    s.gaugeR = 0; s.specialR = true; return true;
+    if (s.gaugeB < 1) return false;
+    s.gaugeB = 0; s.armedB = true; return true;
   }
 }
 
 function stepRoom(room){
   const s = room.s;
   if (!room.started) return;
-  if (s.mode === "ready"){
-    // auto-serve shortly after start (optional)
-    // keep in ready until someone moves? We'll allow manual serve via first movement? For simplicity, auto serve after 0.4s
-  }
   if (s.mode !== "play") return;
 
-  s.paddleL = clamp(room.input.L.y, 0, 1);
-  s.paddleR = clamp(room.input.R.y, 0, 1);
+  s.paddleT = clamp(room.input.T.x, 0, 1);
+  s.paddleB = clamp(room.input.B.x, 0, 1);
 
   s.ballX += s.vx * DT;
   s.ballY += s.vy * DT;
 
   if (Math.abs(s.spin) > 0.0005){
-    s.vy += s.spin * 0.22 * DT;
+    s.vx += s.spin * 0.22 * DT;
     s.spin *= 0.985;
   } else s.spin = 0;
 
-  if (s.ballY - s.ballR < 0){
-    s.ballY = s.ballR; s.vy *= -1; s.spin *= 0.9;
-  }
-  if (s.ballY + s.ballR > 1){
-    s.ballY = 1 - s.ballR; s.vy *= -1; s.spin *= 0.9;
-  }
+  if (s.ballX - s.ballR < 0){ s.ballX = s.ballR; s.vx *= -1; s.spin *= 0.9; }
+  if (s.ballX + s.ballR > 1){ s.ballX = 1 - s.ballR; s.vx *= -1; s.spin *= 0.9; }
 
-  const paddleHalfH = 0.13;
-  const hitZone = (pY) => (s.ballY > pY - paddleHalfH && s.ballY < pY + paddleHalfH);
-  const pLX = 0.08, pRX = 0.92, pW = 0.012;
+  const paddleHalfW = 0.16;
+  const hitZone = (pX) => (s.ballX > pX - paddleHalfW && s.ballX < pX + paddleHalfW);
+
+  const pTy = 0.08, pBy = 0.92, pH = 0.012;
 
   function bounceFrom(role){
-    const pY = (role === "L") ? s.paddleL : s.paddleR;
-    const rel = clamp((s.ballY - pY) / paddleHalfH, -1, 1);
+    const pX = (role === "T") ? s.paddleT : s.paddleB;
+    const rel = clamp((s.ballX - pX) / paddleHalfW, -1, 1);
 
-    if (role === "L") s.gaugeL = clamp(s.gaugeL + 0.14, 0, 1);
-    else s.gaugeR = clamp(s.gaugeR + 0.14, 0, 1);
+    if (role === "T") s.gaugeT = clamp(s.gaugeT + 0.14, 0, 1);
+    else s.gaugeB = clamp(s.gaugeB + 0.14, 0, 1);
 
-    let speed = Math.min(0.95, Math.hypot(s.vx, s.vy) + 0.02);
+    let speed = Math.min(1.0, Math.hypot(s.vx, s.vy) + 0.02);
 
-    const armed = (role === "L") ? s.specialL : s.specialR;
+    const armed = (role === "T") ? s.armedT : s.armedB;
     if (armed){
-      if (role === "L") s.specialL = false; else s.specialR = false;
-      speed = Math.min(1.15, speed + 0.22);
+      if (role === "T") s.armedT = false; else s.armedB = false;
+      speed = Math.min(1.2, speed + 0.22);
       s.spin = clamp(rel * 0.9, -1.6, 1.6);
     } else {
       s.spin = clamp(s.spin * 0.4 + rel * 0.06, -0.6, 0.6);
     }
 
-    const sign = (role === "L") ? 1 : -1;
+    const vySign = (role === "T") ? 1 : -1;
     const angle = clamp(rel * 0.9, -1.1, 1.1);
-    s.vx = Math.cos(angle) * speed * sign;
-    s.vy = Math.sin(angle) * speed;
+    s.vx = Math.sin(angle) * speed;
+    s.vy = Math.cos(angle) * speed * vySign;
   }
 
-  if (s.vx < 0 && s.ballX - s.ballR <= pLX + pW){
-    if (hitZone(s.paddleL)){ s.ballX = pLX + pW + s.ballR; bounceFrom("L"); }
+  if (s.vy < 0 && s.ballY - s.ballR <= pTy + pH){
+    if (hitZone(s.paddleT)){ s.ballY = pTy + pH + s.ballR; bounceFrom("T"); }
   }
-  if (s.vx > 0 && s.ballX + s.ballR >= pRX - pW){
-    if (hitZone(s.paddleR)){ s.ballX = pRX - pW - s.ballR; bounceFrom("R"); }
+  if (s.vy > 0 && s.ballY + s.ballR >= pBy - pH){
+    if (hitZone(s.paddleB)){ s.ballY = pBy - pH - s.ballR; bounceFrom("B"); }
   }
 
-  if (s.ballX < -0.08) score(room, "R");
-  if (s.ballX > 1.08) score(room, "L");
+  if (s.ballY < -0.08) score(room, "B");
+  if (s.ballY > 1.08) score(room, "T");
 }
 
-// basic static file server
 function serveFile(req, res){
   let urlPath = req.url.split("?")[0];
   if (urlPath === "/") urlPath = "/index.html";
@@ -208,28 +178,35 @@ function serveFile(req, res){
 }
 
 const server = http.createServer(serveFile);
-
-// WebSocket on /ws
 const wss = new WebSocket.Server({ noServer: true });
 
 server.on("upgrade", (req, socket, head) => {
   const pathname = req.url.split("?")[0];
-  if (pathname !== "/ws") {
-    socket.destroy();
-    return;
-  }
-  wss.handleUpgrade(req, socket, head, (ws) => {
-    wss.emit("connection", ws, req);
-  });
+  if (pathname !== "/ws") { socket.destroy(); return; }
+  wss.handleUpgrade(req, socket, head, (ws) => wss.emit("connection", ws, req));
 });
+
+function leave(ws){
+  const me = meta.get(ws);
+  if (!me || !me.room) return;
+  const room = me.room;
+  const role = me.role;
+  if (room.players[role] === ws) room.players[role] = null;
+  me.room = null; me.role = null;
+
+  for (const r of ["T","B"]){
+    const p = room.players[r];
+    if (p) send(p, roomInfo(room, r));
+  }
+  if (!room.players.T && !room.players.B) rooms.delete(room.code);
+}
 
 wss.on("connection", (ws) => {
   meta.set(ws, { room: null, role: null });
-  send(ws, { t:"info", msg:"connected" });
+  send(ws, { t: "info", msg: "connected" });
 
   ws.on("message", (data) => {
-    let m;
-    try { m = JSON.parse(String(data)); } catch { return; }
+    let m; try { m = JSON.parse(String(data)); } catch { return; }
     const me = meta.get(ws);
 
     if (m.t === "create"){
@@ -239,12 +216,12 @@ wss.on("connection", (ws) => {
       const room = createRoom(code);
       rooms.set(code, room);
 
-      room.players.L = ws;
-      me.room = room; me.role = "L";
-      room.chars.L = clamp((m.c|0)||0, 0, 2);
-      resetRound(room, "R");
+      room.players.T = ws;
+      me.room = room; me.role = "T";
+      room.chars.T = clamp((m.c|0)||0, 0, 2);
+      resetRound(room, "B");
 
-      send(ws, roomInfo(room, "L"));
+      send(ws, roomInfo(room, "T"));
       return;
     }
 
@@ -255,19 +232,19 @@ wss.on("connection", (ws) => {
       if (!room) { send(ws, {t:"info", msg:"部屋が見つかりません"}); return; }
 
       let role = null;
-      if (!room.players.L) role = "L";
-      else if (!room.players.R) role = "R";
+      if (!room.players.T) role = "T";
+      else if (!room.players.B) role = "B";
       else { send(ws, {t:"info", msg:"部屋が満員です"}); return; }
 
       room.players[role] = ws;
       me.room = room; me.role = role;
-      room.chars[role] = clamp((m.c|0)||0,0,2);
+      room.chars[role] = clamp((m.c|0)||0, 0, 2);
 
-      for (const r of ["L","R"]){
+      for (const r of ["T","B"]){
         const p = room.players[r];
         if (p) send(p, roomInfo(room, r));
       }
-      const other = role === "L" ? "R" : "L";
+      const other = role === "T" ? "B" : "T";
       const otherWs = room.players[other];
       if (otherWs) {
         send(ws, {t:"other_char", c: room.chars[other]});
@@ -281,7 +258,7 @@ wss.on("connection", (ws) => {
     if (m.t === "char"){
       if (!me.room || !me.role) return;
       me.room.chars[me.role] = clamp(m.c|0,0,2);
-      const other = me.role === "L" ? "R" : "L";
+      const other = me.role === "T" ? "B" : "T";
       const otherWs = me.room.players[other];
       if (otherWs) send(otherWs, {t:"other_char", c: me.room.chars[me.role]});
       return;
@@ -290,14 +267,13 @@ wss.on("connection", (ws) => {
     if (m.t === "start"){
       if (!me.room) return;
       const room = me.room;
-      if (!room.players.L || !room.players.R) { send(ws, {t:"info", msg:"相手が入室していません"}); return; }
+      if (!room.players.T || !room.players.B) { send(ws, {t:"info", msg:"相手が入室していません"}); return; }
       room.started = true;
-      // reset match
-      room.s.scoreL = 0; room.s.scoreR = 0;
-      room.s.gaugeL = 0; room.s.gaugeR = 0;
+      room.s.scoreT = 0; room.s.scoreB = 0;
+      room.s.gaugeT = 0; room.s.gaugeB = 0;
       room.s.winner = null;
-      resetRound(room, "R");
-      serve(room); // auto-serve immediately
+      resetRound(room, "B");
+      serve(room);
       broadcast(room, {t:"start_ok"});
       return;
     }
@@ -305,12 +281,12 @@ wss.on("connection", (ws) => {
     if (m.t === "rematch"){
       if (!me.room) return;
       const room = me.room;
-      if (!room.players.L || !room.players.R) return;
+      if (!room.players.T || !room.players.B) return;
       room.started = true;
-      room.s.scoreL = 0; room.s.scoreR = 0;
-      room.s.gaugeL = 0; room.s.gaugeR = 0;
+      room.s.scoreT = 0; room.s.scoreB = 0;
+      room.s.gaugeT = 0; room.s.gaugeB = 0;
       room.s.winner = null;
-      resetRound(room, "R");
+      resetRound(room, "B");
       serve(room);
       broadcast(room, {t:"start_ok"});
       return;
@@ -318,7 +294,7 @@ wss.on("connection", (ws) => {
 
     if (m.t === "input"){
       if (!me.room || !me.role) return;
-      me.room.input[me.role].y = clamp(Number(m.y), 0, 1);
+      me.room.input[me.role].x = clamp(Number(m.x), 0, 1);
       return;
     }
 
@@ -329,43 +305,20 @@ wss.on("connection", (ws) => {
     }
   });
 
-  ws.on("close", () => {
-    leave(ws);
-    meta.delete(ws);
-  });
+  ws.on("close", () => { leave(ws); meta.delete(ws); });
 });
-
-function leave(ws){
-  const me = meta.get(ws);
-  if (!me || !me.room) return;
-  const room = me.room;
-  const role = me.role;
-
-  if (room.players[role] === ws) room.players[role] = null;
-  me.room = null; me.role = null;
-
-  for (const r of ["L","R"]){
-    const p = room.players[r];
-    if (p) send(p, roomInfo(room, r));
-  }
-
-  if (!room.players.L && !room.players.R){
-    rooms.delete(room.code);
-  }
-}
 
 setInterval(() => {
   for (const room of rooms.values()){
     stepRoom(room);
     broadcast(room, { t:"state", s: {
       mode: room.s.mode,
-      scoreL: room.s.scoreL, scoreR: room.s.scoreR,
-      paddleL: room.s.paddleL, paddleR: room.s.paddleR,
+      scoreT: room.s.scoreT, scoreB: room.s.scoreB,
+      paddleT: room.s.paddleT, paddleB: room.s.paddleB,
       ballX: room.s.ballX, ballY: room.s.ballY,
       ballR: room.s.ballR,
-      spin: room.s.spin,
-      gaugeL: room.s.gaugeL, gaugeR: room.s.gaugeR,
-      specialL: room.s.specialL, specialR: room.s.specialR,
+      gaugeT: room.s.gaugeT, gaugeB: room.s.gaugeB,
+      armedT: room.s.armedT, armedB: room.s.armedB,
       winner: room.s.winner
     }});
   }
