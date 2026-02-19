@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"/>
-  <title>ふじきたきゅうげーむ（通信）</title>
+  <title>ふじきたっきゅうゲーム（通信）</title>
   <style>
     html,body{margin:0;height:100%;background:#000;color:#e8eef7;font-family:system-ui,-apple-system,Segoe UI,Roboto,"Hiragino Kaku Gothic ProN","Noto Sans JP",sans-serif;}
     #wrap{height:100%;display:flex;align-items:center;justify-content:center;overflow:hidden;}
@@ -39,7 +39,7 @@
 
 <div id="lobby" class="overlay">
   <div class="panel">
-    <div class="title">ふじきたきゅうげーむ（通信）</div>
+    <div class="title">ふじきたっきゅうゲーム（通信）</div>
     <div class="sub">
       ・スマホ縦画面専用（上下で対戦）<br/>
       ・自分の半分だけ操作（上/下）<br/>
@@ -155,7 +155,7 @@
     ws = new WebSocket(WS_URL);
     ws.onopen = ()=>{
       state.connected=true;
-      badge("接続OK", false);
+      badge("接続OK", true);
       el.msg.textContent="接続OK。部屋を作る or 入ってください。";
       send({t:"hello", c: myChar});
     };
